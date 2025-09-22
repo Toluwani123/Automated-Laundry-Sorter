@@ -45,30 +45,30 @@ static void timer0_init(void){
 #define TCS_S3 BIT4   // P2.4
 
 static void tcs_pins_init(void){
-    // S0..S3 as outputs
+
     P2DIR |= (TCS_S0|TCS_S1|TCS_S2|TCS_S3);
 
-    // Start with maximum scale = 100% (S0=1, S1=1) to ensure a strong signal
+
     P2OUT |= (TCS_S0 | TCS_S1);
 
-    // OUT on P1.6 as GPIO input with rising-edge interrupt
+    // OUT on P1.6 as GPIO input
     P1DIR  &= ~BIT6;
-    P1SEL0 &= ~BIT6; P1SEL1 &= ~BIT6;   // ensure GPIO mode
+    P1SEL0 &= ~BIT6; P1SEL1 &= ~BIT6;
     P1IES  &= ~BIT6;                    // rising edge
-    P1IFG  &= ~BIT6;                    // clear any pending flag
+    P1IFG  &= ~BIT6;                    // clear flags
     P1IE   |=  BIT6;                    // enable interrupt
 }
 
-/* ---------------- Edge-timestamping ISR state ---------------- */
+/* ---------------- Period Calculation for ISR---------------- */
 static volatile unsigned int  g_last = 0;
-static volatile unsigned int  g_period = 0;  // microseconds (1 tick = 1 us)
+static volatile unsigned int  g_period = 0;
 static volatile unsigned int  g_edges = 0;
 
 #pragma vector=PORT1_VECTOR
 __interrupt void PORT1_ISR(void){
     if (P1IFG & BIT6){
         unsigned int now = TA0R;
-        unsigned int dt  = now - g_last;   // 16-bit wrap handled by unsigned math
+        unsigned int dt  = now - g_last;
         g_last = now;
         if (dt){ g_period = dt; g_edges++; }
         P1IFG &= ~BIT6;
@@ -79,9 +79,9 @@ __interrupt void PORT1_ISR(void){
 static inline void tcs_filter_red(void)   { P2OUT &= ~(TCS_S2|TCS_S3); }          // S2=0,S3=0
 static inline void tcs_filter_green(void) { P2OUT |=  (TCS_S2|TCS_S3); }          // 1,1
 static inline void tcs_filter_blue(void)  { P2OUT &= ~TCS_S2; P2OUT |= TCS_S3; }  // 0,1
-// (clear filter = S2=1,S3=0) if you want it for debugging
 
-/* Average N edge periods with a simple timeout (in us). Returns 0 if no edges. */
+
+/* Average periods with a simple timeout based on sample size provided. Returns 0 if no edges. */
 static unsigned long measure_avg_period(unsigned int samples, unsigned int timeout_us){
     unsigned int last = g_edges;
     unsigned long sum = 0;
@@ -101,27 +101,30 @@ static unsigned long measure_avg_period(unsigned int samples, unsigned int timeo
 
 int main(void){
     WDTCTL = WDTPW | WDTHOLD;
-    PM5CTL0 &= ~LOCKLPM5;            // ✅ unlock GPIO (principle #1)
+    PM5CTL0 &= ~LOCKLPM5;            // unlock GPIO
 
-    clock_1mhz();                    // ✅ stable 1 MHz SMCLK
-    uart1_init_9600();               // ✅ UCA1 on P3.4/P3.5 with known-good 9600
-    timer0_init();
-    tcs_pins_init();
-    __enable_interrupt();
+    clock_1mhz();                    // Clock Call
+    uart1_init_9600();               // UART Setup Call
+    timer0_init();                   // Timer 0 Setup call
+    tcs_pins_init();                 // Pin COnfig
+    __enable_interrupt();            // Enable ISR's
 
     puts1("\r\nTCS3200 quick test running...\r\n");
 
     for(;;){
-        unsigned long pr=0, pg=0, pb=0;
-        unsigned long fr=0, fg=0, fb=0;
+        unsigned long pr=0, pg=0, pb=0; // Periods for color
+        unsigned long fr=0, fg=0, fb=0; // Frequencies for colors
 
-        tcs_filter_red();   dly(20000);  // 20 ms settle
+        tcs_filter_red();
+        dly(20000);
         pr = measure_avg_period(40, 120000); if (pr) fr = 1000000UL / pr;
 
-        tcs_filter_green(); dly(20000);
+        tcs_filter_green();
+        dly(20000);
         pg = measure_avg_period(40, 120000); if (pg) fg = 1000000UL / pg;
 
-        tcs_filter_blue();  dly(20000);
+        tcs_filter_blue();
+        dly(20000);
         pb = measure_avg_period(40, 120000); if (pb) fb = 1000000UL / pb;
 
         if (fr|fg|fb){
@@ -145,6 +148,6 @@ int main(void){
         }
 
 
-        dly(500000); // 0.5 s
+        dly(500000); //0.5s delay
     }
 }
