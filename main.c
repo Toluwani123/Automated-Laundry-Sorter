@@ -115,6 +115,8 @@ int main(void){
         unsigned long pr=0, pg=0, pb=0; // Periods for color
         unsigned long fr=0, fg=0, fb=0; // Frequencies for colors
 
+
+
         // ---- Measure Red ----
         tcs_filter_red();
         dly(20000);
@@ -133,6 +135,12 @@ int main(void){
         pb = measure_avg_period(40, 120000);
         if (pb) fb = 1000000UL / pb;
 
+        unsigned long brightness_sum = fr + fg + fb;
+        float r_ratio = (float)fr / brightness_sum;
+        float g_ratio = (float)fg / brightness_sum;
+        float b_ratio = (float)fb / brightness_sum;
+        unsigned long brightness_avg = brightness_sum / 3;
+
         if (fr|fg|fb){
             puts1("R="); putu32(fr);
             puts1(" Hz, G="); putu32(fg);
@@ -140,19 +148,21 @@ int main(void){
             puts1(" Hz  ");
 
             // 1. Dominant color detection
-            if (fr > fg && fr > fb) {
+            if (r_ratio > 0.45 && g_ratio < r_ratio && b_ratio < r_ratio) {
                 puts1("=> RED ");
-            } else if (fg > fr && fg > fb) {
+            } else if (g_ratio > 0.36 && g_ratio > r_ratio && g_ratio > b_ratio) {
                 puts1("=> GREEN ");
-            } else if (fb > fr && fb > fg) {
+            } else if (b_ratio > 0.40 && r_ratio < 0.35 && g_ratio < 0.35) {
                 puts1("=> BLUE ");
+
             } else {
-                puts1("=> UNCLEAR ");
+                puts1("=> MIXED/OTHER ");
             }
+
             // 2. Light vs Dark classification
-            unsigned long brightness_sum = fr + fg + fb;
-            unsigned long brightness_avg = brightness_sum / 3;
-            if (brightness_avg > 5000) {
+
+
+            if (brightness_avg > 7000) {
                 puts1("=> LIGHT CLOTHES\r\n");
             } else {
                 puts1("=> DARK CLOTHES\r\n");
