@@ -115,17 +115,23 @@ int main(void){
         unsigned long pr=0, pg=0, pb=0; // Periods for color
         unsigned long fr=0, fg=0, fb=0; // Frequencies for colors
 
+        // ---- Measure Red ----
         tcs_filter_red();
         dly(20000);
-        pr = measure_avg_period(40, 120000); if (pr) fr = 1000000UL / pr;
+        pr = measure_avg_period(40, 120000);
+        if (pr) fr = 1000000UL / pr;
 
+        // ---- Measure Green ----
         tcs_filter_green();
         dly(20000);
-        pg = measure_avg_period(40, 120000); if (pg) fg = 1000000UL / pg;
+        pg = measure_avg_period(40, 120000);
+        if (pg) fg = 1000000UL / pg;
 
+        // ---- Measure Blue ----
         tcs_filter_blue();
         dly(20000);
-        pb = measure_avg_period(40, 120000); if (pb) fb = 1000000UL / pb;
+        pb = measure_avg_period(40, 120000);
+        if (pb) fb = 1000000UL / pb;
 
         if (fr|fg|fb){
             puts1("R="); putu32(fr);
@@ -133,21 +139,30 @@ int main(void){
             puts1(" Hz, B="); putu32(fb);
             puts1(" Hz  ");
 
-            // Simple dominant-color check
+            // 1. Dominant color detection
             if (fr > fg && fr > fb) {
-                puts1("=> RED\r\n");
+                puts1("=> RED ");
             } else if (fg > fr && fg > fb) {
-                puts1("=> GREEN\r\n");
+                puts1("=> GREEN ");
             } else if (fb > fr && fb > fg) {
-                puts1("=> BLUE\r\n");
+                puts1("=> BLUE ");
             } else {
-                puts1("=> UNCLEAR\r\n");
+                puts1("=> UNCLEAR ");
             }
+            // 2. Light vs Dark classification
+            unsigned long brightness_sum = fr + fg + fb;
+            unsigned long brightness_avg = brightness_sum / 3;
+            if (brightness_avg > 5000) {
+                puts1("=> LIGHT CLOTHES\r\n");
+            } else {
+                puts1("=> DARK CLOTHES\r\n");
+            }
+
         } else {
             puts1("no signal (check OUT=P1.6, power, light)\r\n");
         }
 
-
         dly(500000); //0.5s delay
     }
+
 }
