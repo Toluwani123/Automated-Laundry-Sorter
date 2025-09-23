@@ -148,11 +148,11 @@ int main(void){
             puts1(" Hz  ");
 
             // 1. Dominant color detection
-            if (r_ratio > 0.45 && g_ratio < r_ratio && b_ratio < r_ratio) {
+            if (r_ratio > 0.38 && g_ratio < r_ratio && b_ratio < r_ratio) {
                 puts1("=> RED ");
             } else if (g_ratio > 0.36 && g_ratio > r_ratio && g_ratio > b_ratio) {
                 puts1("=> GREEN ");
-            } else if (b_ratio > 0.40 && r_ratio < 0.35 && g_ratio < 0.35) {
+            } else if (b_ratio > 0.35 && r_ratio < b_ratio && g_ratio < b_ratio) {
                 puts1("=> BLUE ");
 
             } else {
@@ -162,7 +162,7 @@ int main(void){
             // 2. Light vs Dark classification
 
 
-            if (brightness_avg > 7000) {
+            if (brightness_avg > 5200) {
                 puts1("=> LIGHT CLOTHES\r\n");
             } else {
                 puts1("=> DARK CLOTHES\r\n");
