@@ -1,178 +1,253 @@
 #include <msp430.h>
+#include "dht11.h"
+#include "tcs3200.h"
+#include <stdint.h>
+
 #define dly(cyc) __delay_cycles(cyc)
 
-/* ---------------- UART1: 9600 8N1 on P3.4/P3.5 ---------------- */
-static void uart1_init_9600(void){
-    // Route P3.4=UCA1TXD, P3.5=UCA1RXD
-    P3SEL1 &= ~(BIT4|BIT5);
-    P3SEL0 |=  (BIT4|BIT5);
+// System States
+typedef enum {
+    STATE_IDLE,
+    STATE_READ_HUMIDITY,
+    STATE_READ_COLOR,
+    STATE_DECIDE_BASKET,
+    STATE_ACTUATE,
+    STATE_ERROR
+} system_state_t;
 
-    UCA1CTLW0 = UCSWRST | UCSSEL__SMCLK;         // hold eUSCI; SMCLK source
-    // 1 MHz -> 9600, oversampling
+// Basket types
+typedef enum {
+    BASKET_DRY_LIGHT,
+    BASKET_DRY_DARK,
+    BASKET_DAMP_LIGHT,
+    BASKET_DAMP_DARK,
+    BASKET_UNKNOWN
+} basket_t;
+
+// Global variables
+static system_state_t current_state = STATE_IDLE;
+static unsigned char humidity = 0;
+static unsigned char temperature = 0;
+static unsigned long red_freq = 0, green_freq = 0, blue_freq = 0;
+static basket_t target_basket = BASKET_UNKNOWN;
+
+// Thresholds - adjust based on your testing
+#define HUMIDITY_THRESHOLD 70    // % above which clothing is considered damp
+#define BRIGHTNESS_THRESHOLD 5200 // Your existing threshold
+
+/* UART Functions */
+static void uart1_init_9600(void){
+    P3SEL1 &= ~(BIT4|BIT5);
+    P3SEL0 |= (BIT4|BIT5);
+    UCA1CTLW0 = UCSWRST | UCSSEL__SMCLK;
     UCA1BRW   = 6;
-    UCA1MCTLW = UCOS16 | (8 << 4) | (0x20 << 8); // UCBRF=8, UCBRS≈0x20
-    UCA1CTLW0 &= ~UCSWRST;                       // enable UART
+    UCA1MCTLW = UCOS16 | (8<<4) | (0x20<<8);
+    UCA1CTLW0 &= ~UCSWRST;
 }
-static void putc1(char c){ while(!(UCA1IFG & UCTXIFG)); UCA1TXBUF = c; }
-static void puts1(const char*s){ while(*s) putc1(*s++); }
-static void putu32(unsigned long v){
-    char b[11]; int i=10; b[i]=0;
-    do{ b[--i] = '0' + (v%10); v/=10; }while(v);
+
+static void putc1(char c){
+    while(!(UCA1IFG & UCTXIFG));
+    UCA1TXBUF = c;
+}
+
+static void puts1(const char *s){
+    while(*s) putc1(*s++);
+}
+
+static void putu8(unsigned char v){
+    char b[4];
+    int i=3;
+    b[i]=0;
+    do{
+        b[--i]='0'+(v%10);
+        v/=10;
+    } while(v);
     puts1(&b[i]);
 }
 
-/* ---------------- 1 MHz clocks & TimerA0 free-running ---------------- */
+static void putu32(unsigned long v){
+    char b[11];
+    int i=10;
+    b[i]=0;
+    do{
+        b[--i] = '0' + (v%10);
+        v/=10;
+    } while(v);
+    puts1(&b[i]);
+}
+
+/* 1 MHz clock */
 static void clock_1mhz(void){
     CSCTL0_H = CSKEY_H;
-    CSCTL1 = DCOFSEL_0;                                   // 1 MHz DCO
-    CSCTL2 = SELA__VLOCLK | SELS__DCOCLK | SELM__DCOCLK;  // ACLK=VLO, SMCLK/MCLK=DCO
+    CSCTL1 = DCOFSEL_0;
+    CSCTL2 = SELA__VLOCLK | SELS__DCOCLK | SELM__DCOCLK;
     CSCTL3 = DIVA__1 | DIVS__1 | DIVM__1;
     CSCTL0_H = 0;
 }
-static void timer0_init(void){
-    TA0CTL = TASSEL__SMCLK | MC__CONTINUOUS | TACLR;      // 1 MHz free-run
+
+/* Timer for TCS3200 */
+void timer0_init(void){
+    TA0CTL = TASSEL__SMCLK | MC__CONTINUOUS | TACLR;
 }
 
-/* ---------------- TCS3200 wiring (your pins) ----------------
-   OUT -> P1.6 (interrupt input)
-   S0  -> P2.6   S1 -> P2.7
-   S2  -> P2.3   S3 -> P2.4
-   VCC 3.3V, GND common. No OE pin on your module.
----------------------------------------------------------------- */
-#define TCS_S0 BIT6   // P2.6
-#define TCS_S1 BIT7   // P2.7
-#define TCS_S2 BIT3   // P2.3
-#define TCS_S3 BIT4   // P2.4
+/* Classification Logic */
+basket_t classify_clothing(unsigned char hum, unsigned long r, unsigned long g, unsigned long b) {
+    if (r == 0 && g == 0 && b == 0) {
+        return BASKET_UNKNOWN; // No color data
+    }
 
-static void tcs_pins_init(void){
+    unsigned long brightness_sum = r + g + b;
+    if (brightness_sum == 0) return BASKET_UNKNOWN;
 
-    P2DIR |= (TCS_S0|TCS_S1|TCS_S2|TCS_S3);
+    float r_ratio = (float)r / brightness_sum;
+    float g_ratio = (float)g / brightness_sum;
+    float b_ratio = (float)b / brightness_sum;
+    unsigned long brightness_avg = brightness_sum / 3;
 
+    // Determine if dark or light (using your existing threshold)
+    int is_dark = (brightness_avg <= BRIGHTNESS_THRESHOLD);
+    int is_damp = (hum >= HUMIDITY_THRESHOLD);
 
-    P2OUT |= (TCS_S0 | TCS_S1);
-
-    // OUT on P1.6 as GPIO input
-    P1DIR  &= ~BIT6;
-    P1SEL0 &= ~BIT6; P1SEL1 &= ~BIT6;
-    P1IES  &= ~BIT6;                    // rising edge
-    P1IFG  &= ~BIT6;                    // clear flags
-    P1IE   |=  BIT6;                    // enable interrupt
-}
-
-/* ---------------- Period Calculation for ISR---------------- */
-static volatile unsigned int  g_last = 0;
-static volatile unsigned int  g_period = 0;
-static volatile unsigned int  g_edges = 0;
-
-#pragma vector=PORT1_VECTOR
-__interrupt void PORT1_ISR(void){
-    if (P1IFG & BIT6){
-        unsigned int now = TA0R;
-        unsigned int dt  = now - g_last;
-        g_last = now;
-        if (dt){ g_period = dt; g_edges++; }
-        P1IFG &= ~BIT6;
+    // Classification logic
+    if (is_damp) {
+        return is_dark ? BASKET_DAMP_DARK : BASKET_DAMP_LIGHT;
+    } else {
+        return is_dark ? BASKET_DRY_DARK : BASKET_DRY_LIGHT;
     }
 }
 
-/* ---------------- Filter helpers ---------------- */
-static inline void tcs_filter_red(void)   { P2OUT &= ~(TCS_S2|TCS_S3); }          // S2=0,S3=0
-static inline void tcs_filter_green(void) { P2OUT |=  (TCS_S2|TCS_S3); }          // 1,1
-static inline void tcs_filter_blue(void)  { P2OUT &= ~TCS_S2; P2OUT |= TCS_S3; }  // 0,1
+/* State Machine */
+void run_state_machine(void) {
+    switch(current_state) {
+        case STATE_IDLE:
+            puts1("\r\n=== Starting Measurement ===\r\n");
+            current_state = STATE_READ_HUMIDITY;
+            break;
+
+        case STATE_READ_HUMIDITY:
+            puts1("Reading humidity... ");
+
+            // Remove this debug section - it interferes with timing
+            // if(P1IN & DHT_BIT) {
+            //     puts1("(Line HIGH) ");
+            // } else {
+            //     puts1("(Line LOW) ");
+            // }
+
+            // Reset DHT11 pin
+            P1DIR &= ~DHT_BIT;
+            P1REN |= DHT_BIT;
+            P1OUT |= DHT_BIT;
+            dly(100000); // 100ms stabilization
+
+            /* --- pause TCS3200 interrupt during DHT transaction --- */
+            uint8_t saved_p1ie = P1IE;          // save Port 1 interrupt enable state
+            P1IE &= ~TCS_OUT_PIN;               // mask TCS3200 OUT interrupt (from tcs3200.h)
+            __disable_interrupt();              // avoid preemption during tight DHT timing
+
+            char ok = dht11_read(&humidity, &temperature);
+
+            __enable_interrupt();
+            P1IFG &= ~TCS_OUT_PIN;              // clear any pending edge captured while masked
+            P1IE = saved_p1ie;                  // restore Port 1 interrupt enables
+            /* ------------------------------------------------------ */
+
+            if (ok) {
+                puts1("OK - H:"); putu8(humidity);
+                puts1("% T:"); putu8(temperature); puts1("C\r\n");
+                current_state = STATE_READ_COLOR;
+            } else {
+                puts1("FAILED - Retrying in 3s\r\n");
+                dly(3000000);
+            }
 
 
-/* Average periods with a simple timeout based on sample size provided. Returns 0 if no edges. */
-static unsigned long measure_avg_period(unsigned int samples, unsigned int timeout_us){
-    unsigned int last = g_edges;
-    unsigned long sum = 0;
-    unsigned int  got = 0;
-    unsigned int  t0  = TA0R;
-    while (got < samples){
-        if (g_edges != last){
-            last = g_edges;
-            sum += g_period;
-            got++;
-            t0 = TA0R;     // reset timeout after each edge
-        }
-        if ((unsigned int)(TA0R - t0) > timeout_us) break;
+
+            break;
+
+        case STATE_READ_COLOR:
+            puts1("Reading color... ");
+            tcs3200_measure(&red_freq, &green_freq, &blue_freq);
+
+            if(red_freq || green_freq || blue_freq) {
+                puts1("OK - R:"); putu32(red_freq);
+                puts1(" G:"); putu32(green_freq);
+                puts1(" B:"); putu32(blue_freq); puts1(" Hz\r\n");
+                current_state = STATE_DECIDE_BASKET;
+            } else {
+                puts1("FAILED - No color data\r\n");
+                current_state = STATE_ERROR;
+            }
+            break;
+
+        case STATE_DECIDE_BASKET:
+            target_basket = classify_clothing(humidity, red_freq, green_freq, blue_freq);
+
+            puts1("Classification: ");
+            switch(target_basket) {
+                case BASKET_DRY_LIGHT:
+                    puts1("DRY LIGHT clothing");
+                    break;
+                case BASKET_DRY_DARK:
+                    puts1("DRY DARK clothing");
+                    break;
+                case BASKET_DAMP_LIGHT:
+                    puts1("DAMP LIGHT clothing");
+                    break;
+                case BASKET_DAMP_DARK:
+                    puts1("DAMP DARK clothing");
+                    break;
+                default:
+                    puts1("UNKNOWN - check sensors");
+                    break;
+            }
+            puts1("\r\n");
+
+            current_state = STATE_ACTUATE;
+            break;
+
+        case STATE_ACTUATE:
+            // This is where you'd trigger the servos/actuators
+            // For now, just output which basket to use
+            puts1("ACTION: Move to basket ");
+            putu8(target_basket);
+            puts1("\r\n");
+
+            puts1("=== Measurement Complete ===\r\n\r\n");
+            dly(3000000); // Wait 3 seconds before next measurement
+            current_state = STATE_IDLE;
+            break;
+
+        case STATE_ERROR:
+            puts1("SYSTEM ERROR - Resetting in 3 seconds...\r\n");
+            dly(3000000);
+            current_state = STATE_IDLE;
+            break;
     }
-    return got ? (sum / got) : 0;
 }
 
-int main(void){
+int main(void) {
     WDTCTL = WDTPW | WDTHOLD;
-    PM5CTL0 &= ~LOCKLPM5;            // unlock GPIO
+    PM5CTL0 &= ~LOCKLPM5;
 
-    clock_1mhz();                    // Clock Call
-    uart1_init_9600();               // UART Setup Call
-    timer0_init();                   // Timer 0 Setup call
-    tcs_pins_init();                 // Pin COnfig
-    __enable_interrupt();            // Enable ISR's
+    // System initialization
+    clock_1mhz();
+    uart1_init_9600();
 
-    puts1("\r\nTCS3200 quick test running...\r\n");
+    // Sensor initialization
+    dht11_init();
+    tcs3200_init();
 
-    for(;;){
-        unsigned long pr=0, pg=0, pb=0; // Periods for color
-        unsigned long fr=0, fg=0, fb=0; // Frequencies for colors
+    // Enable interrupts (for TCS3200)
+    __enable_interrupt();
 
+    puts1("\r\nLaundry Sorter System Initialized\r\n");
+    puts1("DHT11 + TCS3200 Integrated State Machine\r\n");
+    puts1("Waiting 2 seconds for sensors to stabilize...\r\n");
+    dly(2000000);
 
-
-        // ---- Measure Red ----
-        tcs_filter_red();
-        dly(20000);
-        pr = measure_avg_period(40, 120000);
-        if (pr) fr = 1000000UL / pr;
-
-        // ---- Measure Green ----
-        tcs_filter_green();
-        dly(20000);
-        pg = measure_avg_period(40, 120000);
-        if (pg) fg = 1000000UL / pg;
-
-        // ---- Measure Blue ----
-        tcs_filter_blue();
-        dly(20000);
-        pb = measure_avg_period(40, 120000);
-        if (pb) fb = 1000000UL / pb;
-
-        unsigned long brightness_sum = fr + fg + fb;
-        float r_ratio = (float)fr / brightness_sum;
-        float g_ratio = (float)fg / brightness_sum;
-        float b_ratio = (float)fb / brightness_sum;
-        unsigned long brightness_avg = brightness_sum / 3;
-
-        if (fr|fg|fb){
-            puts1("R="); putu32(fr);
-            puts1(" Hz, G="); putu32(fg);
-            puts1(" Hz, B="); putu32(fb);
-            puts1(" Hz  ");
-
-            // 1. Dominant color detection
-            if (r_ratio > 0.38 && g_ratio < r_ratio && b_ratio < r_ratio) {
-                puts1("=> RED ");
-            } else if (g_ratio > 0.36 && g_ratio > r_ratio && g_ratio > b_ratio) {
-                puts1("=> GREEN ");
-            } else if (b_ratio > 0.35 && r_ratio < b_ratio && g_ratio < b_ratio) {
-                puts1("=> BLUE ");
-
-            } else {
-                puts1("=> MIXED/OTHER ");
-            }
-
-            // 2. Light vs Dark classification
-
-
-            if (brightness_avg > 5200) {
-                puts1("=> LIGHT CLOTHES\r\n");
-            } else {
-                puts1("=> DARK CLOTHES\r\n");
-            }
-
-        } else {
-            puts1("no signal (check OUT=P1.6, power, light)\r\n");
-        }
-
-        dly(500000); //0.5s delay
+    while(1) {
+        run_state_machine();
+        dly(50000); // Small delay between state checks
     }
-
 }
