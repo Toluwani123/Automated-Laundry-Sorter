@@ -5,7 +5,7 @@ Coordinates all sensors and makes classification decisions
 
 import time
 from config import STATE_IDLE, STATE_READ_HUMIDITY, STATE_READ_COLOR, STATE_DECIDE_BASKET, STATE_ACTUATE, STATE_ERROR
-from classifier import classify_basket, get_enhanced_color_label, rgb_to_hsv_normalized
+from classifier import *
 
 class LaundrySorter:
     def __init__(self, tcs_sensor, dht_sensor):
@@ -14,7 +14,8 @@ class LaundrySorter:
         self.dht_sensor = dht_sensor
         
         # Data storage
-        self.last_ok = {"H": None, "S": None, "V": None, "label": None}
+        # Data storage
+        self.last_ok = {"H": None, "S": None, "V": None, "detailed_label": None, "color_family": None}
         self.humidity = None
         self.temperature = None
         self.rgb_hz = (0, 0, 0)
@@ -61,23 +62,35 @@ class LaundrySorter:
                 self.hsv = (h_deg, s, v)
                 
                 # Use enhanced color labeling with RGB ratios
-                label = get_enhanced_color_label(h_deg, s, v, rn, gn, bn)
-                self.last_ok = {"H": h_deg, "S": s, "V": v, "label": label}
+                # Get BOTH the detailed label AND the color family
+                detailed_label = get_enhanced_color_label(h_deg, s, v, rn, gn, bn)
+                color_family = get_color_family(h_deg, s, v, rn, gn, bn)
+                
+                self.last_ok = {
+                    "H": h_deg, "S": s, "V": v, 
+                    "detailed_label": detailed_label,
+                    "color_family": color_family
+                }
                 
                 print(f"  Hz R={r:.0f} G={g:.0f} B={b:.0f} | "
                       f"Norm=({rn:.2f},{gn:.2f},{bn:.2f}) | "
-                      f"HSV=({h_deg:.1f}°, {s:.2f}, {v:.2f}) -> {label}")
+                      f"HSV=({h_deg:.1f}°, {s:.2f}, {v:.2f})")
+                print(f"  Detailed Color: {detailed_label}")
+                print(f"  Color Family: {color_family}")
                 self.state = STATE_DECIDE_BASKET
 
             elif self.state == STATE_DECIDE_BASKET:
-                _, _, v = self.hsv
-                self.classification = classify_basket(self.humidity, v)
-                print(f"Classification: {self.classification} "
-                      f"(H={self.humidity}%  V={v:.2f})")
+               # Use color family for basket classification
+                color_family = self.last_ok["color_family"]
+                self.classification = classify_basket(self.humidity, color_family)
+             
+                print(f"Basket Classification: {self.classification}")
+                print(f"  (H={self.humidity}% Family={color_family})")
                 self.state = STATE_ACTUATE
 
             elif self.state == STATE_ACTUATE:
                 # TODO: Add servo/motor control here
+                print(f"LCD Display: {self.last_ok['detailed_label']}")
                 print(f"ACTION: Move garment to basket: {self.classification}")
                 print("=== Measurement Complete ===\n")
                 time.sleep(1.0)  # Dwell before next cycle
