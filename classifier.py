@@ -7,14 +7,46 @@ from colorsys import rgb_to_hsv
 from config import HUMIDITY_THRESHOLD, V_THRESHOLD
 import time
 
-def classify_basket(humidity_pct, v_value):
-    """Classify laundry into one of four categories"""
+def classify_basket(humidity_pct, color_family):
+    """Classify laundry into one of six categories based on color family"""
     is_damp = humidity_pct >= HUMIDITY_THRESHOLD
-    is_dark = v_value <= V_THRESHOLD
-    if is_damp:
-        return "DAMP_DARK" if is_dark else "DAMP_LIGHT"
+    
+    if color_family == "RED":
+        return "DAMP_RED" if is_damp else "DRY_RED"
+    elif color_family == "GREEN":
+        return "DAMP_GREEN" if is_damp else "DRY_GREEN"
+    elif color_family == "BLUE":
+        return "DAMP_BLUE" if is_damp else "DRY_BLUE"
     else:
-        return "DRY_DARK" if is_dark else "DRY_LIGHT"
+        return "UNKNOWN"
+
+def get_color_family(h_deg, s, v, rn, gn, bn):
+    """
+    Map colors to RGB family for bins
+    """
+    
+    if v < 0.2:
+        total = rn + gn + bn
+        if total > 0:
+            r_ratio = rn / total
+            g_ratio = gn / total
+            b_ratio = bn / total
+            max_ratio = max(r_ratio, g_ratio, b_ratio)
+            
+            if max_ratio == r_ratio and r_ratio > 0.35:
+                return "RED"
+            elif max_ratio == g_ratio and g_ratio > 0.35:
+                return "GREEN"
+            elif max_ratio == b_ratio and b_ratio > 0.35:
+                return "BLUE"
+    
+    # Normal colors - use hue ranges
+    if (h_deg < 60) or (h_deg >= 330):  # Red, Orange, Yellow, Pink, Magenta
+        return "RED"
+    elif h_deg < 180:  # Green, Yellow-Green, Cyan
+        return "GREEN"
+    else:  # Blue, Purple, Blue-Green
+        return "BLUE"
 
 """def get_enhanced_color_label(h_deg, s, v, rn, gn, bn):
    
