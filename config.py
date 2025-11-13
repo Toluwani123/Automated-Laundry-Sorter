@@ -5,6 +5,12 @@ Shared configuration and constants for laundry sorter
 # Pins (BCM numbering)
 S0, S1, S2, S3, OUT = 17, 18, 27, 22, 23   # TCS3200
 DHT_PIN = "D4"                              # DHT22 on GPIO4
+SERVO_PINS = {
+	"Bottom": 14,
+	"Elbow": 15,
+	"Wrist":3,
+	"Claw":2
+}
 
 # Calibration file for TCS
 CAL_FILE = "tcs_cal.json"
