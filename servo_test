@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""
+Simple, low-jitter servo test for Raspberry Pi using RPi.GPIO.
+
+What this script does:
+- Sets up one servo on GPIO18 (BCM numbering)
+- Provides helper functions to:
+    - convert angle -> duty cycle
+    - set a target angle
+    - move smoothly between angles
+- In main(), it moves between a few angles so you can see motion
+  without a lot of shaking / jitter.
+"""
+
+import time
+import RPi.GPIO as GPIO
+
+# ======== CONFIGURATION ========
+
+SERVO_PIN = 18       # BCM pin number (use 12, 13, 18 or 19 for hardware PWM on some models)
+PWM_FREQ = 50        # 50 Hz is standard for hobby servos
+
+# These values work for many SG90 / MG90S type servos.
+# If your servo jitters at the ends, slightly adjust MIN_DUTY / MAX_DUTY.
+MIN_DUTY = 2.5       # duty cycle for ~0 degrees
+MAX_DUTY = 12.5      # duty cycle for ~180 degrees
+
+
+# ======== HELPER FUNCTIONS ========
+
+def angle_to_duty(angle: float) -> float:
+    """
+    Convert an angle in degrees (0–180) to a PWM duty cycle.
+    This maps linearly from [0, 180] -> [MIN_DUTY, MAX_DUTY].
+    """
+    # clamp the angle so we don't command something crazy
+    if angle < 0:
+        angle = 0
+    elif angle > 180:
+        angle = 180
+
+    duty_span = MAX_DUTY - MIN_DUTY
+    return MIN_DUTY + (angle / 180.0) * duty_span
+
+
+def setup_servo(pin: int = SERVO_PIN, freq: int = PWM_FREQ):
+    """
+    Initialize GPIO and return a PWM object for the servo.
+    We only call pwm.start() ONCE here to reduce jitter.
+    """
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(pin, GPIO.OUT)
+
+    pwm = GPIO.PWM(pin, freq)
+    pwm.start(0)  # start with 0% duty (no pulse)
+    return pwm
+
+
+def set_angle(pwm, angle: float, settle_time: float = 0.25):
+    """
+    Move servo to a specific angle and let it settle.
+    After settling, we set duty to 0 to further reduce idle jitter.
+    """
+    duty = angle_to_duty(angle)
+    pwm.ChangeDutyCycle(duty)
+    time.sleep(settle_time)    # allow servo to reach target position
+    pwm.ChangeDutyCycle(0)     # stop actively driving when idle
+
+
+def move_smooth(pwm, start_angle: float, end_angle: float,
+                step: int = 2, delay: float = 0.02):
+    """
+    Smoothly move from start_angle to end_angle in small steps.
+
+    Jitter-reduction tricks:
+    - We do NOT restart PWM in the loop.
+    - Small but not tiny steps (2–3 degrees) + ~20 ms delay.
+    - After we reach the final angle, we zero the duty cycle.
+    """
+    # Decide direction (positive or negative step)
+    if end_angle > start_angle and step < 0:
+        step = -step  # ensure step points in the right direction
+    if end_angle < start_angle and step > 0:
+        step = -step
+
+    # Build the range inclusive of end_angle
+    if step > 0:
+        angle_range = range(int(start_angle), int(end_angle) + 1, step)
+    else:
+        angle_range = range(int(start_angle), int(end_angle) - 1, step)
+
+    for angle in angle_range:
+        duty = angle_to_duty(angle)
+        pwm.ChangeDutyCycle(duty)
+        time.sleep(delay)
+
+    # Small extra pause at the end to let it fully settle
+    time.sleep(0.1)
+    pwm.ChangeDutyCycle(0)
+
+
+# ======== MAIN TEST ========
+
+def main():
+    pwm = setup_servo()
+
+    try:
+        print("Starting low-jitter servo test. Press Ctrl+C to stop.")
+        while True:
+            # Example moves – change these to whatever angles you need
+            print("→ Move to 0°")
+            set_angle(pwm, 0)
+            time.sleep(0.5)
+
+            print("→ Smooth move 0° → 90°")
+            move_smooth(pwm, 0, 90, step=2, delay=0.02)
+            time.sleep(0.5)
+
+            print("→ Smooth move 90° → 180°")
+            move_smooth(pwm, 90, 180, step=2, delay=0.02)
+            time.sleep(0.5)
+
+            print("→ Smooth move 180° → 0°")
+            move_smooth(pwm, 180, 0, step=2, delay=0.02)
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+        print("\nStopping test…")
+
+    finally:
+        # Always stop PWM and clean up GPIO on exit
+        pwm.stop()
+        GPIO.cleanup()
+        print("GPIO cleaned up.")
+
+
+if __name__ == "__main__":
+    main()
