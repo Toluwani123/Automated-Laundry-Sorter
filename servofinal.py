@@ -1,60 +1,130 @@
 import RPi.GPIO as GPIO
 import time
 
-# === CONFIG ===
-SERVO_PIN = 22
-PWM_FREQ = 50        # Standard servo frequency (50 Hz)
-MIN_DC = 2.5         # duty cycle for ~0°
-MID_DC = 7.5         # duty cycle for ~90°
-MAX_DC = 12.5        # duty cycle for ~180°
+# === SERVO CONFIG ===
+PWM_FREQ = 5 
+MIN_DC = 2.5
+MAX_DC = 12.5
+
+SERVO_PINS = {
+    "S1": 17,  # GPIO 17
+    "S2": 27,  # GPIO 27
+    "S3": 22,  # GPIO 22
+    "S4": 5    # GPIO 5
+}
 
 def angle_to_duty(angle):
-    """Convert an angle (0–180) to duty cycle (2.5–12.5)."""
+    """Convert angle (0–180) to duty cycle (2.5–12.5%)."""
     return MIN_DC + (angle / 180.0) * (MAX_DC - MIN_DC)
 
-def move_servo(pwm, angle, wait=0.5):
-    """Move servo to angle instantly."""
-    duty = angle_to_duty(angle)
-    pwm.ChangeDutyCycle(duty)
-    time.sleep(wait)
+def smooth_move_to(pwms, current_angles, name, target_angle, duration=1.5, steps=75):
+    """
+    Smoothly move one servo from its current angle to target_angle.
+    duration: total time for the move (seconds)
+    steps: how many tiny steps to break it into (higher = smoother)
+    """
+    start_angle = current_angles[name]
+    delta = target_angle - start_angle
+    if steps <= 0:
+        steps = 1
+    step_angle = delta / float(steps)
+    step_delay = duration / float(steps)
 
-def smooth_move(pwm, start, end, steps=50, delay=0.02):
-    """Move smoothly between angles."""
-    if start < end:
-        rng = range(start, end + 1)
-    else:
-        rng = range(start, end - 1, -1)
+    for i in range(steps + 1):
+        angle = start_angle + step_angle * i
+        pwms[name].ChangeDutyCycle(angle_to_duty(angle))
+        time.sleep(step_delay)
 
-    for angle in rng:
-        pwm.ChangeDutyCycle(angle_to_duty(angle))
-        time.sleep(delay)
+    current_angles[name] = target_angle
 
+
+# === SETUP ===
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(SERVO_PIN, GPIO.OUT)
+GPIO.setwarnings(False)
 
-pwm = GPIO.PWM(SERVO_PIN, PWM_FREQ)
-pwm.start(0)
+pwms = {}
+current_angles = {}
+
+for name, pin in SERVO_PINS.items():
+    GPIO.setup(pin, GPIO.OUT)
+    pwm = GPIO.PWM(pin, PWM_FREQ)
+    pwm.start(0)
+    pwms[name] = pwm
+    current_angles[name] = 0  # start all at 0° logically
+
 time.sleep(0.5)
 
+'''# Move all servos physically to 0° slowly at the start (optional)
+for name in SERVO_PINS.keys():
+    smooth_move_to(pwms, current_angles, name, 0, duration=2.5, steps=100)
+time.sleep(0.5)'''
+
 try:
-    # --- SMOOTH SERVO MOTION SEQUENCE ---
-    smooth_move(pwm,0,130)
-    time.sleep(0.9)
-    
-    smooth_move(pwm,130,60)
-    time.sleep(0.9)
-    
-    
-   
-  
-    
+    # ======== SEQUENCE WITH SMOOTH MOTION ========
 
-    
+    # S1 starts at 0° (we are already at 0, but we keep the step for clarity)
+    smooth_move_to(pwms, current_angles, "S1", 0)
+    time.sleep(1)
 
+    # S3 -> 120°
+    smooth_move_to(pwms, current_angles, "S3", 80)
+    time.sleep(1)
 
+    # S2 -> 20°
+    smooth_move_to(pwms, current_angles, "S2",30)
+    time.sleep(1)
 
+    # S4 -> 120°
+    smooth_move_to(pwms, current_angles, "S4",0)
+    time.sleep(1)
+
+    # S4 -> 0°
+    smooth_move_to(pwms, current_angles, "S4", 0)
+    time.sleep(1)
+
+    # S2 -> 0°
+    smooth_move_to(pwms, current_angles, "S3", 80)
+    time.sleep(1)
+
+    # S3 -> 60°
+    smooth_move_to(pwms, current_angles, "S2", 0)
+    time.sleep(1)
+
+    # S1 -> 40°
+    smooth_move_to(pwms, current_angles, "S1", 90)
+    time.sleep(1)
+
+    '''# S2 -> 40°
+    smooth_move_to(pwms, current_angles, "S2", 0)
+    time.sleep(1)
+
+    # S2 -> 60°
+    smooth_move_to(pwms, current_angles, "S2", 0)
+    time.sleep(1)
+
+    # wait 5 seconds
+    time.sleep(5)
+
+    # S1 -> 140°
+    smooth_move_to(pwms, current_angles, "S1", 140,duration= 2.5,steps=80)
+    time.sleep(1)
+
+    # S3 -> 120°
+    smooth_move_to(pwms, current_angles, "S3", 120)
+    time.sleep(1)
+
+    # S2 -> 20°
+    smooth_move_to(pwms, current_angles, "S2", 20)
+    time.sleep(1)
+
+    # S4 -> 120°
+    smooth_move_to(pwms, current_angles, "S4", 120)
+    time.sleep(1)'''
+
+    # ======== END OF SEQUENCE ========
 
 finally:
-    pwm.ChangeDutyCycle(0)
-    pwm.stop()
+    for pwm in pwms.values():
+        pwm.ChangeDutyCycle(0)
+        pwm.stop()
     GPIO.cleanup()

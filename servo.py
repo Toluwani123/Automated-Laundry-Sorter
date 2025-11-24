@@ -1,21 +1,22 @@
 # servo.py
 import time
 import RPi.GPIO as GPIO
-from config import SERVO_PINS, SERVO_POSITIONS
+from config import (
+    SERVO_PINS,
+    SERVO_POSITIONS,
+    STATE_SERVO_ORDER,
+    PER_SERVO_DELAY,
+    READ_STATE_EXTRA_DELAY,
+)
 
-# === SERVO CONFIG ===
 PWM_FREQ = 50        # Standard hobby servo frequency
 MIN_DC = 2.5         # ~0°
 MAX_DC = 12.5        # ~180°
 
 
 def angle_to_duty(angle):
-    """
-    Convert an angle (0–180) to duty cycle (2.5–12.5),
-    same mapping as your working single-servo script.
-    """
+    """Convert an angle (0–180) to duty cycle (2.5–12.5)."""
     angle = float(angle)
-    # clamp to 0–180
     if angle < 0:
         angle = 0
     if angle > 180:
@@ -25,146 +26,98 @@ def angle_to_duty(angle):
 
 class ServoArm:
     def __init__(self):
-        """
-        Initialize GPIO and PWM channels for each joint:
-        SERVO_PINS = { "Bottom": pin, "Elbow": pin, ... }
-        """
         GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BCM)
 
         self.pwms = {}
         self.current_angles = {}
 
-        # Setup each servo pin and start PWM at 0% duty
-        for joint, pin in SERVO_PINS.items():
+        # Initialize PWM for each servo
+        for name, pin in SERVO_PINS.items():
             GPIO.setup(pin, GPIO.OUT)
             pwm = GPIO.PWM(pin, PWM_FREQ)
-            pwm.start(0)  # 0% duty (no pulse)
-            self.pwms[joint] = pwm
-            self.current_angles[joint] = 0.0
-         
+            pwm.start(0)           # start with no pulse
+            self.pwms[name] = pwm
+            self.current_angles[name] = 0.0  # assume starting at 0 for now
 
-        time.sleep(0.5)
-
-       
-    # ----- LOW LEVEL: set one joint angle -----
-
-    def _set_servo_angle(self, joint, angle, wait=0.0):
+    def _move_single_servo_smooth(self, name, target_angle, duration=1.0, steps=60):
         """
-        Internal helper: directly set a single joint to an angle.
+        Smoothly move ONE servo from its current angle to target_angle
+        over 'duration' seconds, in 'steps' increments.
         """
-        angle = float(angle)
-        duty = angle_to_duty(angle)
-        pwm = self.pwms[joint]
-        pwm.ChangeDutyCycle(duty)
-        self.current_angles[joint] = angle
-        if wait > 0:
-            time.sleep(wait)
+        pwm = self.pwms[name]
+        start_angle = self.current_angles.get(name, 0.0)
+        target_angle = float(target_angle)
 
-    # ----- PUBLIC: single-joint helpers (for testing) -----
+        if steps < 1:
+            steps = 1
 
-    def move_joint_instant(self, joint, angle, wait=0.5):
-        """
-        Move one joint to 'angle' and wait a bit.
-        Then set duty to 0 to reduce jitter.
-        """
-        self._set_servo_angle(joint, angle, wait=wait)
-        # stop sending pulses (many servos prefer this to avoid buzzing)
-        self.pwms[joint].ChangeDutyCycle(0)
+        step_time = duration / steps
+        delta = (target_angle - start_angle) / steps
 
-    def smooth_move_joint(self, joint, start, end, steps=50, delay=0.02):
-        """
-        Smoothly move one joint from 'start' to 'end' in small steps,
-        using the same idea as your smooth_move(pwm, start, end, ...) function.
-        """
-        start = float(start)
-        end = float(end)
-        steps = max(1, int(steps))
-
-        # Decide direction
-        if start < end:
-            rng = range(int(start), int(end) + 1)
-        else:
-            rng = range(int(start), int(end) - 1, -1)
-
-        pwm = self.pwms[joint]
-        for angle in rng:
+        angle = start_angle
+        for _ in range(steps):
+            angle += delta
             duty = angle_to_duty(angle)
             pwm.ChangeDutyCycle(duty)
-            self.current_angles[joint] = float(angle)
-            time.sleep(delay)
+            time.sleep(step_time)
 
-        # relax servo
-        pwm.ChangeDutyCycle(0)
+        # Final snap to exact target
+        duty = angle_to_duty(target_angle)
+        pwm.ChangeDutyCycle(duty)
+        self.current_angles[name] = target_angle
+        
+        time.sleep(0.05)
+        pwm.ChangeDutyCycle(0.0)
 
-    # ----- PUBLIC: multi-joint pose move -----
-
-    def move_to(self, pose_name, duration=1.0, steps=50):
+    def run_state(self, state_name, move_duration=1.0, steps=60):
         """
-        Smoothly move *all* joints to the angles defined in SERVO_POSITIONS[pose_name].
-        - duration: total time for the move (seconds)
-        - steps: number of interpolation steps
+        Run ONE logical servo state:
+        - Look up final angles in SERVO_POSITIONS[state_name]
+        - Move servos in the order specified by STATE_SERVO_ORDER[state_name]
+        - Each servo move is smooth, then wait PER_SERVO_DELAY before the next
+        - If state is MOISTURE_READ or COLOR_READ, wait READ_STATE_EXTRA_DELAY
+          AFTER all servo moves.
         """
-        if pose_name not in SERVO_POSITIONS:
-            raise ValueError(f"Unknown servo pose: {pose_name}")
+        if state_name not in SERVO_POSITIONS:
+            print(f"[WARN] Unknown servo state '{state_name}'")
+            return
 
-        target_angles = SERVO_POSITIONS[pose_name]
-        steps = max(1, int(steps))
-        step_delay = max(0.0, float(duration)) / steps
+        pose = SERVO_POSITIONS[state_name]
+        try:
+            order = STATE_SERVO_ORDER[state_name]
+        except KeyError:
+            # Fallback: if no explicit order, use dictionary order
+            order = list(pose.keys())
 
-        # Ensure we have starting angles stored for all joints
-        for joint in SERVO_PINS.keys():
-            if joint not in self.current_angles:
-                self.current_angles[joint] = 90.0
+        print(f"\n=== SERVO STATE: {state_name} ===")
+        print(f"Target pose: {pose}")
+        print(f"Servo order: {order}")
 
-        # Take a snapshot of starting angles so interpolation is smooth
-        start_angles = dict(self.current_angles)
+        # Move each servo in the defined order (one at a time)
+        for servo_name in order:
+            if servo_name not in pose:
+                continue  # nothing defined for this servo in this state
 
-        # Interpolate like your smooth_move, but for all joints together
-        for i in range(steps + 1):
-            t = i / steps  # goes 0.0 → 1.0
-            for joint, pin in SERVO_PINS.items():
-                if joint not in target_angles:
-                    # If pose didn't specify this joint, keep it where it is
-                    continue
+            target_angle = pose[servo_name]
+            print(f"  -> Moving {servo_name} to {target_angle}°")
 
-                start = float(start_angles[joint])
-                end = float(target_angles[joint])
-                angle = start + (end - start) * t
+            self._move_single_servo_smooth(
+                servo_name,
+                target_angle,
+                duration=move_duration,
+                steps=steps,
+            )
 
-                duty = angle_to_duty(angle)
-                pwm = self.pwms[joint]
-                pwm.ChangeDutyCycle(duty)
-                self.current_angles[joint] = angle
+            # 1s delay between servo movements
+            time.sleep(PER_SERVO_DELAY)
 
-            time.sleep(step_delay)
-
-        # After finishing, set duty to 0 on all servos to reduce humming
-        for pwm in self.pwms.values():
-            pwm.ChangeDutyCycle(0)
-
-    # ----- CLEANUP -----
+        # Extra 5s delay after read states (before transitioning to next state)
+        if state_name in ("MOISTURE_READ", "COLOR_READ"):
+            print(f"  [HOLD] {state_name} – waiting {READ_STATE_EXTRA_DELAY} seconds...")
+            time.sleep(READ_STATE_EXTRA_DELAY)
 
     def cleanup(self):
-        """
-        Stop all PWM channels and clean up GPIO.
-        Call this from your main program's finally block.
-        """
         for pwm in self.pwms.values():
-            pwm.ChangeDutyCycle(0)
             pwm.stop()
         GPIO.cleanup()
-
-
-# Optional: standalone quick test
-if __name__ == "__main__":
-    arm = ServoArm()
-    try:
-        # Adjust these to match your SERVO_POSITIONS keys
-        test_poses = ["IDLE"]
-        for name in test_poses:
-            print(f"Moving to pose: {name}")
-            arm.move_to(name, duration=1.5, steps=50)
-            time.sleep(1.0)
-    finally:
-        arm.cleanup()

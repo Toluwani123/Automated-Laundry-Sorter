@@ -16,16 +16,17 @@ class DHT22Sensor:
     def setup(self):
         """Initialize DHT22 sensor"""
         # Convert pin string to board pin
-        pin_map = {"D4": board.D4, "D17": board.D17}
-        dht_pin = pin_map.get(DHT_PIN, board.D4)
+        pin_map = {"D4": board.D4, "D17": board.D17,"D23": board.D23}
+        dht_pin = pin_map.get(DHT_PIN, board.D23)
         
         # Disable PulseIn to avoid libgpiod timing issues
         self.sensor = adafruit_dht.DHT22(dht_pin, use_pulseio=False)
         return self.sensor
     
-    def read_with_retries(self, retries=5, pause=0.6):
+    def read_with_retries(self, retries=10, pause=0.6):
         """Read humidity and temperature with retry logic"""
         # Respect minimum interval between reads
+        time.sleep(pause)
         since_last = time.time() - self.last_read_time
         if since_last < DHT_MIN_INTERVAL:
             time.sleep(DHT_MIN_INTERVAL - since_last)
