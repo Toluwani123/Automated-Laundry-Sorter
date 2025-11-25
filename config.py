@@ -17,7 +17,7 @@ SERVO_POSITIONS = {
      # a. Idle state: S1 - 0, S2 - 0, S3 - 120, S4 - 120
     "IDLE": {
         "Bottom": 0,
-        "Elbow": 55,
+        "Elbow": 75,
         "Wrist": 120,
         "Claw": 100,
     },
@@ -45,7 +45,7 @@ SERVO_POSITIONS = {
     #    S2 0→40, S3 120→80, S1 stays 20, S4 stays 0
     "MOISTURE_READ": {
         "Bottom": 12,
-        "Elbow": 110,
+        "Elbow": 120,
         "Wrist": 85,
         "Claw": 0,
     },
@@ -63,7 +63,7 @@ SERVO_POSITIONS = {
     #    S2 0→30, S3 120→80, S4 stays 0, S1 stays 40
     "COLOR_READ": {
         "Bottom": 30,
-        "Elbow": 125,
+        "Elbow": 120,
         "Wrist": 95,
         "Claw": 0,
     },
@@ -120,7 +120,7 @@ SERVO_POSITIONS = {
     },
     "BASKET_DRY_BLUE":{
     
-        "Bottom": 150,
+        "Bottom": 135,
         "Elbow": 100,
         "Wrist": 80,
         "Claw": 120,
@@ -198,7 +198,8 @@ TCS_SAMPLE = 0.12
 TCS_REPEATS = 3
 
 # Classification thresholds
-HUMIDITY_THRESHOLD = 72     
+HUMIDITY_THRESHOLD = 58     
+HUMIDITY_MARGIN = 3
 V_THRESHOLD = 0.40         
 
 # State constants

@@ -4,12 +4,19 @@ Converts RGB to HSV and classifies based on humidity and color value
 """
 
 from colorsys import rgb_to_hsv
-from config import HUMIDITY_THRESHOLD, V_THRESHOLD
+from config import HUMIDITY_THRESHOLD, HUMIDITY_MARGIN, V_THRESHOLD
 import time
 
 def classify_basket(humidity_pct, color_family):
     """Classify laundry into one of six categories based on color family"""
-    is_damp = humidity_pct >= HUMIDITY_THRESHOLD
+    if humidity_pct >= HUMIDITY_THRESHOLD + HUMIDITY_MARGIN:
+        is_damp = True
+        
+    elif humidity_pct <= HUMIDITY_THRESHOLD - HUMIDITY_MARGIN:
+        is_damp=False
+        
+    else:
+        is_damp=True
     
     if color_family == "RED":
         return "DAMP_RED" if is_damp else "DRY_RED"
